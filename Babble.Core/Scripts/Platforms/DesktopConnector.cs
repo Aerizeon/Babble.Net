@@ -14,7 +14,7 @@ public class DesktopConnector : PlatformConnector
     private static readonly HashSet<string> _IPConnectionsSuffixes
         = new(StringComparer.OrdinalIgnoreCase) { "local", "local/" };
 
-    protected override Type DefaultCapture => typeof(OpenCVCapture);
+    protected override Type DefaultCapture => typeof(VFTCapture);
 
     public DesktopConnector(string Url) : base(Url)
     {

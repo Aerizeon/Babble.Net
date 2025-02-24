@@ -130,17 +130,17 @@ public abstract class PlatformConnector
                 roiY.ToString());
             BabbleCore.Instance.Settings.Save();
         }
-        if (roiWidth > Capture.RawMat.Width)
+        if (roiX + roiWidth > Capture.RawMat.Width)
         {
-            roiWidth = Math.Clamp(roiWidth, 0, Capture.RawMat.Width);
+            roiWidth = Math.Clamp(roiWidth, 0, Capture.RawMat.Width - roiX);
             BabbleCore.Instance.Settings.UpdateSetting<int>(
                 nameof(BabbleCore.Instance.Settings.Cam.RoiWindowW),
                 roiWidth.ToString());
             BabbleCore.Instance.Settings.Save();
         }
-        if (roiHeight > Capture.RawMat.Width)
+        if (roiY + roiHeight > Capture.RawMat.Height)
         {
-            roiHeight = Math.Clamp(roiHeight, 0, Capture.RawMat.Height);
+            roiHeight = Math.Clamp(roiHeight, 0, Capture.RawMat.Height - roiY);
             BabbleCore.Instance.Settings.UpdateSetting<int>(
                 nameof(BabbleCore.Instance.Settings.Cam.RoiWindowH),
                roiHeight.ToString());

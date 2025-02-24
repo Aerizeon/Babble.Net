@@ -31,7 +31,7 @@ public partial class BabbleCore
     public ILogger<BabbleCore> Logger { get; private set; }
 
     public PlatformConnector? PlatformConnector;
-    
+
     private readonly DenseTensor<float> _inputTensor = new DenseTensor<float>([1, 1, 256, 256]);
     private readonly Stopwatch _sw = Stopwatch.StartNew();
     private Size _inputSize = new Size(256, 256);
@@ -40,7 +40,7 @@ public partial class BabbleCore
     private OneEuroFilter? _floatFilter;
     private float _lastTime = 0;
     private string? _inputName;
-    
+
     static BabbleCore()
     {
         Instance = new BabbleCore();
@@ -85,7 +85,7 @@ public partial class BabbleCore
             }
         };
     }
-    
+
     /// <summary>
     /// Big bang. True to load saved settings, false to use default ones.
     /// </summary>
@@ -112,7 +112,7 @@ public partial class BabbleCore
     public void Start(BabbleSettings settings)
     {
         Logger.LogInformation("Starting BabbleCore...");
-        
+
         // Fail fast
         if (IsRunning)
         {
@@ -129,12 +129,12 @@ public partial class BabbleCore
         const string defaultModelName = "model.onnx";
         string modelPath = Path.Combine(AppContext.BaseDirectory, defaultModelName);
         Utils.ExtractEmbeddedResource(
-            Assembly.GetExecutingAssembly(), 
+            Assembly.GetExecutingAssembly(),
             Assembly.
                 GetExecutingAssembly().
                 GetManifestResourceNames().
                 First(x => x.Contains(defaultModelName)), // Babble model
-            modelPath, 
+            modelPath,
             overwrite: false);
 
         if (File.Exists(Instance.Settings.GeneralSettings.GuiModelFile))
@@ -176,7 +176,7 @@ public partial class BabbleCore
             Logger.LogError("Tried to to poll Babble.Core, but it wasn't running!");
             return false;
         }
-        
+
         // Test if the camera is not ready or connecting to new source
         if (!PlatformConnector.ExtractFrameData(_inputTensor.Buffer.Span, _inputSize)) return false;
 
@@ -243,11 +243,13 @@ public partial class BabbleCore
         else
         {
             using var convertedMat = new Mat();
-            Cv2.CvtColor(PlatformConnector.Capture.RawMat, convertedMat, (PlatformConnector.Capture.RawMat.Channels() == 1) ? color switch {
+            Cv2.CvtColor(PlatformConnector.Capture.RawMat, convertedMat, (PlatformConnector.Capture.RawMat.Channels() == 1) ? color switch
+            {
                 ColorType.BGR_24 => ColorConversionCodes.GRAY2BGR,
                 ColorType.RGB_24 => ColorConversionCodes.GRAY2RGB,
                 ColorType.RGBA_32 => ColorConversionCodes.GRAY2RGBA,
-            } : color switch {
+            } : color switch
+            {
                 ColorType.GRAY_8 => ColorConversionCodes.BGR2GRAY,
                 ColorType.RGB_24 => ColorConversionCodes.BGR2RGB,
                 ColorType.RGBA_32 => ColorConversionCodes.BGR2RGBA,
@@ -313,7 +315,7 @@ public partial class BabbleCore
         sessionOptions.IntraOpNumThreads = Math.Clamp(Settings.GeneralSettings.GuiInferenceThreads, 0, 2);
         sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
         // ~3% savings worth ~6ms avg latency. Not noticeable at 60fps?
-        sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0");  
+        sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0");
         sessionOptions.EnableMemoryPattern = true;
         return sessionOptions;
     }
@@ -333,7 +335,7 @@ public partial class BabbleCore
             if (OperatingSystem.IsAndroid())
             {
                 PlatformConnector = new AndroidConnector(Settings.Cam.CaptureSource);
-            } 
+            }
             else
             {
                 // Else, for WinUI, macOS, watchOS, MacCatalyst, tvOS, Tizen, etc...
@@ -341,7 +343,7 @@ public partial class BabbleCore
                 PlatformConnector = new DesktopConnector(Settings.Cam.CaptureSource);
             }
         }
-        
+
         PlatformConnector.Initialize(Settings.Cam.CaptureSource);
     }
 
@@ -354,7 +356,7 @@ public partial class BabbleCore
         sessionOptions.AppendExecutionProvider_CPU();
         if (!Settings.GeneralSettings.GuiUseGpu)
         {
-            return;
+            // return;
         }
 
         var gpuIndex = Settings.GeneralSettings.GuiGpuIndex;
@@ -391,8 +393,9 @@ public partial class BabbleCore
             catch (Exception ex)
             {
                 Logger.LogError(ex, "Failed to configure Gpu.");
-                Logger.LogWarning("Failed to create DML Execution Provider on Windows. Falling back to CUDA..."); 
-            };
+                Logger.LogWarning("Failed to create DML Execution Provider on Windows. Falling back to CUDA...");
+            }
+            ;
 
             // If the user's system does not support DirectML (for whatever reason,
             // it's shipped with Windows 10, version 1903(10.0; Build 18362)+
@@ -402,14 +405,13 @@ public partial class BabbleCore
                 sessionOptions.AppendExecutionProvider_CUDA(gpuIndex);
                 Logger.LogInformation("Initialized ExecutionProvider: CUDA");
                 return;
-                return;
             }
             catch (Exception ex)
             {
                 Logger.LogError(ex, "Failed to configure Gpu.");
                 Logger.LogWarning("Failed to create CUDA Execution Provider on Windows.");
             }
-            
+
             Logger.LogWarning("No GPU acceleration will be applied.");
             Settings.UpdateSetting<bool>(nameof(Settings.GeneralSettings.GuiUseGpu), false.ToString());
         }
@@ -426,7 +428,19 @@ public partial class BabbleCore
                 Logger.LogError(ex, "Failed to configure CUDA.");
                 Logger.LogWarning("Failed to create CUDA Execution Provider on Linux.");
             }
-            
+
+            try
+            {
+                sessionOptions.AppendExecutionProvider_ROCm(gpuIndex);
+                Logger.LogInformation("Initialized ExecutionProvider: ROCm");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to configure ROCm.");
+                Logger.LogWarning("Failed to create ROCm Execution Provider on Linux.");
+            }
+
             Logger.LogWarning("No GPU acceleration will be applied.");
             Settings.UpdateSetting<bool>(nameof(Settings.GeneralSettings.GuiUseGpu), false.ToString());
         }

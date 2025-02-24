@@ -2,9 +2,10 @@
 using Babble.Avalonia.Scripts;
 using Babble.Core;
 using Babble.Core.Settings;
-using Rug.Osc;
+using OscCore;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using System.Net.Sockets;
 using VRCFaceTracking;
 using VRCFaceTracking.BabbleNative;
 using VRCFaceTracking.Core.Params.Expressions;
@@ -16,7 +17,8 @@ public class BabbleOSC
 {
     private static readonly string[] Prefixes = ["/", "/v2/", "/FT/", "/FT/v2/"];
     private List<OscMessage> messages = new List<OscMessage>();
-    private OscSender _sender;
+    private Socket? _oscSocket = null;
+    private IPEndPoint? _oscRemoteEndpoint = null;
     private OSCQuery _query;
     private CancellationTokenSource _cancellationTokenSource;
     private Task _sendTask;
@@ -58,8 +60,7 @@ public class BabbleOSC
             if (setting == guiOSCAddress || setting == guiOSCPort)
             {
                 // Close and dispose the current sender
-                _sender.Close();
-                _sender.Dispose();
+                _oscSocket?.Close();
 
                 // Delay before attempting to reconnect
                 await Task.Delay(1000);
@@ -72,22 +73,16 @@ public class BabbleOSC
         };
     }
 
-    [MemberNotNull(nameof(_sender))]
     private void ConfigureReceiver(IPAddress host, int remotePort)
     {
-        if (_sender is not null)
+        if(_oscSocket is not null)
         {
-            if (_sender.State == OscSocketState.Connected) return;
-            if (_sender.State == OscSocketState.Closing) return;
+            _oscSocket.Close(1000);
         }
-
-        _sender = new OscSender(host, DEFAULT_LOCAL_PORT, remotePort)
-        {
-            DisconnectTimeout = TIMEOUT_MS
-        };
-
-        // This will throw an exception if a user takes their headset off if OSCQuery is in use
-        _sender.Connect(); 
+        _oscSocket = new Socket(SocketType.Dgram, ProtocolType.Udp);
+        _oscSocket.SendTimeout = TIMEOUT_MS;
+        _oscSocket.ReceiveTimeout = TIMEOUT_MS;
+        _oscRemoteEndpoint = new IPEndPoint(host, remotePort);
     }
 
     private async Task SendLoopAsync(CancellationToken cancellationToken)
@@ -104,11 +99,11 @@ public class BabbleOSC
                 else
                     await SendDesktopParameters(cancellationToken);
 
-                await PollConnectionStatus(cancellationToken);
-                await Task.Delay(25);
+                await Task.Delay(100);
             }
-            catch { }
+            catch (Exception ex) { Console.WriteLine(ex); }
         }
+         Console.WriteLine($"CR: {cancellationToken.IsCancellationRequested}");
     }
 
     private async Task SendMobileParameters(CancellationToken cancellationToken)
@@ -129,8 +124,10 @@ public class BabbleOSC
                 messages.Add(new OscMessage($"/avatar/parameters{prefix}{element.Key}2", bools.Parameter2));
                 messages.Add(new OscMessage($"/avatar/parameters{prefix}{element.Key}4", bools.Parameter4));
                 messages.Add(new OscMessage($"/avatar/parameters{prefix}{element.Key}8", bools.Parameter8));
+                var bundle = new OscBundle(DateTime.Now, messages.ToArray());
 
-                _sender.Send(new OscBundle(DateTime.Now, messages.ToArray()));
+                if(_oscSocket is not null && _oscRemoteEndpoint is not null)
+                await _oscSocket.SendToAsync(bundle.ToByteArray(), SocketFlags.None, _oscRemoteEndpoint, _cancellationTokenSource.Token);
             }
         }
     }
@@ -146,7 +143,7 @@ public class BabbleOSC
             // Don't send the UE copies of pucker/funnel
             var address = BabbleAddresses.Addresses[exp.Key];
             var value = UnifiedTracking.Data.Shapes[(int)exp.Value].Weight;
-            if (value == 0 ||
+            if ( value == 0 ||
                 exp.Value == UnifiedExpressions.LipFunnelLowerRight ||
                 exp.Value == UnifiedExpressions.LipFunnelUpperLeft ||
                 exp.Value == UnifiedExpressions.LipFunnelUpperRight ||
@@ -155,15 +152,22 @@ public class BabbleOSC
                 exp.Value == UnifiedExpressions.LipPuckerUpperRight)
                 continue;
 
-            messages.Add(new OscMessage($"{prefix}{address}", value * (float)mul));
+            messages.Add(new OscMessage($"{prefix}{address}", value * (float) mul));
+        }
+        //var bundle = new OscBundle(DateTime.Now, [.. messages]);
+        if(_oscSocket is not null && _oscRemoteEndpoint is not null)
+        {
+           foreach(OscMessage message in messages)
+           {
+             await _oscSocket.SendToAsync(message.ToByteArray(), SocketFlags.None, _oscRemoteEndpoint, _cancellationTokenSource.Token);
+           }
         }
 
-        _sender.Send(new OscBundle(DateTime.Now, messages.ToArray()));
     }
 
     private async Task PollConnectionStatus(CancellationToken cancellationToken)
     {
-        if (_sender.State != OscSocketState.Closed)
+        /*if (_sender.State != OscSocketState.Closed)
         {
             return;
         }
@@ -176,14 +180,13 @@ public class BabbleOSC
         await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
 
         // Attempt to reconfigure the receiver and reconnect
-        ConfigureReceiver(_sender.RemoteAddress, _sender.Port);
+        ConfigureReceiver(_sender.RemoteAddress, _sender.Port);*/
     }
 
     public void Teardown()
     {
         _cancellationTokenSource.Cancel();
-        _sender.Close();
-        _sender.Dispose();
+        _oscSocket?.Close();
         _cancellationTokenSource.Dispose();
     }
 }
