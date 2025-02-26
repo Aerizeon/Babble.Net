@@ -68,14 +68,27 @@ public class VFTCapture : Capture
     /// </xlinka>
     public override async Task<bool> StartCapture()
     {
-        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
         {
             try
             {
-                // Initialize VideoCapture with URL, timeout for robustness
+                // Open the VFT device and initialize it.
+                var fd = ViveFacialracker.open("/dev/video2", ViveFacialracker.FileOpenFlags.O_RDWR);
+                if (fd != -1)
+                {
+                    try
+                    {
+                        await ViveFacialracker.activate_tracker(fd);
+                    }
+                    finally
+                    {
+                        int result = ViveFacialracker.close(fd);
+                    }
+                }
 
+                // Initialize VideoCapture with URL, timeout for robustness
                 if (int.TryParse(Url, out var index))
-                    _videoCapture = await Task.Run(() => VideoCapture.FromCamera(index, VideoCaptureAPIs.V4L2), cts.Token);
+                    _videoCapture = await Task.Run(() => VideoCapture.FromCamera(2, VideoCaptureAPIs.V4L2), cts.Token);
                 else
                     _videoCapture = await Task.Run(() => new VideoCapture(Url, VideoCaptureAPIs.V4L2), cts.Token);
                 // Set capture mode to YUYV
@@ -83,12 +96,6 @@ public class VFTCapture : Capture
                 // Prevent automatic conversion to RGB
                 Console.WriteLine(_videoCapture.Set(VideoCaptureProperties.ConvertRgb, 0));
                 _loop = true;
-                var fd = ViveFacialracker.open("/dev/video2", ViveFacialracker.FileOpenFlags.O_RDWR);
-                if (fd != 0)
-                {
-                    ViveFacialracker.activate_tracker(fd);
-                    ViveFacialracker.close(fd);
-                }
                 _ = Task.Run(VideoCapture_UpdateLoop);
             }
             catch (AggregateException)

@@ -23,6 +23,8 @@ namespace Babble.Core;
 public partial class BabbleCore
 {
     [MemberNotNullWhen(true, nameof(PlatformConnector), nameof(_session), nameof(_floatFilter), nameof(_calibrationItems))]
+    
+    public bool IsInitializing {get; private set;}
     public bool IsRunning { get; private set; }
     public int FPS => (int)MathF.Floor(1000f / MS);
     public float MS { get; private set; }
@@ -93,6 +95,7 @@ public partial class BabbleCore
     /// <exception cref="InvalidOperationException"></exception>
     public void Start(bool loadConfig = true)
     {
+        IsInitializing = true;
         if (loadConfig)
         {
             Instance.Settings.Load();

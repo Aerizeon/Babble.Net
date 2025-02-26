@@ -1,4 +1,6 @@
 using System.ComponentModel.DataAnnotations;
+using System.Net.Security;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.VisualBasic;
 namespace Babble.Core.Scripts
@@ -86,73 +88,219 @@ namespace Babble.Core.Scripts
 
         public static void xu_set_cur(int fd, byte selector, byte[] data)
         {
-            GCHandle pinnedArray = GCHandle.Alloc(data, GCHandleType.Pinned);
-            var c = new uvc_xu_control_query()
+            Console.WriteLine("xu_set_cur");
+            unsafe
             {
-                unit = 4,
-                selector = selector,
-                query = _UVC_SET_CUR,
-                size = (ushort)data.Length,
-                data = pinnedArray.AddrOfPinnedObject()
-            };
-            GCHandle pinnedObj = GCHandle.Alloc(c, GCHandleType.Pinned);
-            ioctl(fd, (uint)_UVCIOC_CTRL_QUERY, pinnedObj.AddrOfPinnedObject());
-            pinnedArray.Free();
+                fixed (byte* dataptr = &data[0])
+                {
+                    var c = new uvc_xu_control_query()
+                    {
+                        unit = 4,
+                        selector = selector,
+                        query = _UVC_SET_CUR,
+                        size = (ushort)data.Length,
+                        data = (IntPtr)dataptr
+                    };
+                    ioctl(fd, (uint)_UVCIOC_CTRL_QUERY, (IntPtr)(&c));
+                }
+            }
+        }
+
+        public static byte[] xu_get_cur(int fd, byte selector, int len)
+        {
+            //Console.WriteLine("get_cur");
+            byte[] data = new byte[len];
+            unsafe
+            {
+                fixed (byte* dataptr = &data[0])
+                {
+                    uvc_xu_control_query c = new uvc_xu_control_query()
+                    {
+                        unit = 4,
+                        selector = selector,
+                        query = _UVC_GET_CUR,
+                        size = (ushort)data.Length,
+                        data = (IntPtr)dataptr
+                    };
+                    if (ioctl(fd, (uint)_UVCIOC_CTRL_QUERY, (IntPtr)(&c)) != 0)
+                        return data; //TODO: maybe throw here instead?
+                }
+            }
+            return data;
         }
 
         public static void set_cur_no_resp(int fd, byte[] data)
         {
+            Console.WriteLine("set_cur_no_resp: " + string.Join(",", data));
             xu_set_cur(fd, 2, data);
-            Console.WriteLine("set_cur_no_resp");
+        }
+
+        public static bool set_cur(int fd, byte[] data, int timeout = 1000)
+        {
+            Console.WriteLine("set_cur: " + string.Join(", ", data));
+            xu_set_cur(fd, 2, data);
+            CancellationTokenSource cts = new CancellationTokenSource(timeout);
+            while (!cts.Token.IsCancellationRequested)
+            {
+                byte[] rcvdata = xu_get_cur(fd, 2, 384);
+                switch (rcvdata[0])
+                {
+                    case 0x55:
+                        break;
+                    case 0x56:
+                        if (Enumerable.SequenceEqual(data[0..16], rcvdata[1..17]))
+                        {
+                            Console.WriteLine("Equal");
+                            return true;
+                        }
+                        else
+                        {
+                            Console.WriteLine("Non-Equal");
+                            return false;
+                        }
+                    default:
+                        Console.WriteLine("Invalid Response");
+                        return false;
+                }
+            }
+            Console.WriteLine("set_cur timed out");
+            return false;
         }
 
         public static void set_register(int fd, int reg, int addr, int value)
         {
-            byte[] data = new byte[17];
+            Console.WriteLine("set_register");
+            byte[] data = new byte[384];
+
             data[0] = _XU_TASK_SET;
             data[1] = (byte)reg;
             data[2] = 0x60;
             data[3] = 1; // address len
             data[4] = 1; // value len
-
             // address
-            data[5] = (byte)((addr >> 24) & 0xff);
-            data[6] = (byte)((addr >> 16) & 0xff);
-            data[7] = (byte)((addr >> 8) & 0xff);
-            data[8] = (byte)((addr >> 0) & 0xff);
-
+            data[5] = (byte)((addr >> 24) & 0xFF);
+            data[6] = (byte)((addr >> 16) & 0xFF);
+            data[7] = (byte)((addr >> 8) & 0xFF);
+            data[8] = (byte)(addr & 0xFF);
             // page address
             data[9] = 0x90;
             data[10] = 0x01;
             data[11] = 0x00;
             data[12] = 0x01;
-
             // value
-            data[13] = (byte)((value >> 24) & 0xff);
-            data[14] = (byte)((value >> 16) & 0xff);
-            data[15] = (byte)((value >> 8) & 0xff);
-            data[16] = (byte)((value >> 0) & 0xff);
-            set_cur_no_resp(fd, data);
+            data[13] = (byte)((value >> 24) & 0xFF);
+            data[14] = (byte)((value >> 16) & 0xFF);
+            data[15] = (byte)((value >> 8) & 0xFF);
+            data[16] = (byte)(value & 0xFF);
+
+            set_cur(fd, data);
+        }
+
+        public static int get_register(int fd, int reg, int addr)
+        {
+            Console.WriteLine("get_register");
+            byte[] data = new byte[384];
+
+            data[0] = _XU_TASK_GET;
+            data[1] = (byte)reg;
+            data[2] = 0x60;
+            data[3] = 1; // address len
+            data[4] = 1; // value len
+            // address
+            data[5] = (byte)((addr >> 24) & 0xFF);
+            data[6] = (byte)((addr >> 16) & 0xFF);
+            data[7] = (byte)((addr >> 8) & 0xFF);
+            data[8] = (byte)(addr & 0xFF);
+            // page address
+            data[9] = 0x90;
+            data[10] = 0x01;
+            data[11] = 0x00;
+            data[12] = 0x01;
+            // value
+            data[13] = 0x00;
+            data[14] = 0x00;
+            data[15] = 0x00;
+            data[16] = 0x00;
+            data[254] = 0x53;
+            data[255] = 0x54;
+
+            set_cur(fd, data);
+            return 0;
         }
 
         public static void set_register_sensor(int fd, int addr, int value)
         {
+            Console.WriteLine("set_register_sensor");
             set_register(fd, _XU_REG_SENSOR, addr, value);
         }
 
-        public static void activate_tracker(int fd)
+        public static void get_register_sensor(int fd, int addr)
         {
+            Console.WriteLine("get_register_sensor");
+            get_register(fd, _XU_REG_SENSOR, addr);
+        }
+
+        public static void set_enable_stream(int fd, bool enable)
+        {
+            Console.WriteLine("set_enable_stream");
+            byte[] data = new byte[384];
+            data[0] = _XU_TASK_SET;
+            data[1] = 0x14;
+            data[2] = 0x00;
+            data[3] = (byte)(enable ? 0x01 : 0x00);
+            data[254] = 0x53;
+            data[255] = 0x54;
+            set_cur(fd, data);
+        }
+
+        public static uint get_len(int fd)
+        {
+            Console.WriteLine("get_len");
+            uint length = 0;
+            unsafe
+            {
+                uvc_xu_control_query c = new uvc_xu_control_query()
+                {
+                    unit = 4,
+                    selector = 2,
+                    query = _UVC_GET_LEN,
+                    size = 2,
+                    data = (IntPtr)(&length)
+                };
+                ioctl(fd, _UVCIOC_CTRL_QUERY, (IntPtr)(&c));
+            }
+            return length;
+        }
+
+        public async static Task<bool> activate_tracker(int fd)
+        {
+            Console.WriteLine("activate_tracker");
+            //uint l = get_len(fd);
+            byte[] data = new byte[384];
+            data[0] = 0x51;
+            data[1] = 0x52;
+            data[254] = 0x53;
+            data[255] = 0x54;
+
+            set_cur(fd, data);
+            set_enable_stream(fd, false);
+            set_cur(fd, data);
+
+            // 0x02, 0x03 and 0x04 all control IR intensity. 
             set_register_sensor(fd, 0x00, 0x40);
             set_register_sensor(fd, 0x08, 0x01);
             set_register_sensor(fd, 0x70, 0x00);
-            set_register_sensor(fd, 0x02, 0xff);
-            set_register_sensor(fd, 0x03, 0xff);
-            set_register_sensor(fd, 0x04, 0xff);
+            set_register_sensor(fd, 0x02, 0xFF); //IR ON
+            set_register_sensor(fd, 0x03, 0xFF); // IR ON
+            set_register_sensor(fd, 0x04, 0xFF); // IR ON
             set_register_sensor(fd, 0x0e, 0x00);
             set_register_sensor(fd, 0x05, 0xb2);
             set_register_sensor(fd, 0x06, 0xb2);
             set_register_sensor(fd, 0x07, 0xb2);
             set_register_sensor(fd, 0x0f, 0x03);
+            set_cur(fd, data);
+            set_enable_stream(fd, true);
+            return true;
         }
     }
 }
