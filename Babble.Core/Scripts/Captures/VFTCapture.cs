@@ -72,42 +72,48 @@ public class VFTCapture : Capture
         {
             try
             {
-                // Open the VFT device and initialize it.
-                var fd = ViveFacialracker.open("/dev/video2", ViveFacialracker.FileOpenFlags.O_RDWR);
-                if (fd != -1)
+                var videoDevicePaths = Directory.EnumerateFiles("/dev/", "video*");
+                foreach (string path in videoDevicePaths)
                 {
+                    var dev = File.OpenHandle(path, access: FileAccess.ReadWrite);
                     try
                     {
-                        await ViveFacialracker.activate_tracker(fd);
+                        bool isViveFT = false;
+                        unsafe
+                        {
+                            // This is a terrible way to detect the VFT module.. but 
+                            // using the USB device library is a huge pain in the ass.
+                            ViveFacialracker.v4l2_capability c = new();
+                            var rv = ViveFacialracker.v4l2_get_capability((int)dev.DangerousGetHandle(), out c);
+                            string? card = Marshal.PtrToStringAuto((IntPtr)c.card);
+                            string? driver = Marshal.PtrToStringAuto((IntPtr)c.driver);
+                            uint len = ViveFacialracker.get_len((int)dev.DangerousGetHandle());
+                            isViveFT = card is not null && card.Contains("HTC Multimedia Camera") && driver == "uvcvideo" && len == 384;
+                        }
+                        if (isViveFT)
+                        {
+                            ViveFacialracker.activate_tracker((int)dev.DangerousGetHandle());
+                            dev.Close();
+                            _videoCapture = await Task.Run(() => new VideoCapture(path, VideoCaptureAPIs.V4L2), cts.Token);
+                            // Set capture mode to YUYV
+                            Console.WriteLine(_videoCapture.Set(VideoCaptureProperties.Mode, 3));
+                            // Prevent automatic conversion to RGB
+                            Console.WriteLine(_videoCapture.Set(VideoCaptureProperties.ConvertRgb, 0));
+                            _loop = true;
+                            _ = Task.Run(VideoCapture_UpdateLoop);
+                        }
                     }
                     finally
                     {
-                        int result = ViveFacialracker.close(fd);
+                        dev.Close();
                     }
                 }
-
-                // Initialize VideoCapture with URL, timeout for robustness
-                if (int.TryParse(Url, out var index))
-                    _videoCapture = await Task.Run(() => VideoCapture.FromCamera(2, VideoCaptureAPIs.V4L2), cts.Token);
-                else
-                    _videoCapture = await Task.Run(() => new VideoCapture(Url, VideoCaptureAPIs.V4L2), cts.Token);
-                // Set capture mode to YUYV
-                Console.WriteLine(_videoCapture.Set(VideoCaptureProperties.Mode, 3));
-                // Prevent automatic conversion to RGB
-                Console.WriteLine(_videoCapture.Set(VideoCaptureProperties.ConvertRgb, 0));
-                _loop = true;
-                _ = Task.Run(VideoCapture_UpdateLoop);
             }
-            catch (AggregateException)
+            catch
             {
-                // Default to camera index 0 if URL-based capture fails
-                const string defaultSource = "0";
-                _videoCapture = new VideoCapture(defaultSource);
-                BabbleCore.Instance.Settings.UpdateSetting<string>(
-                    nameof(BabbleCore.Instance.Settings.Cam.CaptureSource),
-                    defaultSource);
-                BabbleCore.Instance.Logger.LogWarning($"Failed to initialize VideoCapture with URL: {Url}. Defaulted to camera at index 0.");
+
             }
+
         }
 
         IsReady = _videoCapture.IsOpened();
@@ -121,13 +127,13 @@ public class VFTCapture : Capture
             try
             {
                 IsReady = _videoCapture?.Read(_orignalMat) == true;
-                Mat yuvConvert = Mat.FromPixelData(400, 400, MatType.CV_8UC2, _orignalMat.Data);
-                yuvConvert = yuvConvert.CvtColor(ColorConversionCodes.YUV2GRAY_Y422, 0);
-                yuvConvert = yuvConvert.ColRange(new OpenCvSharp.Range(0, 200));
-                yuvConvert = yuvConvert.Resize(new Size(400, 400));
-                _mat = yuvConvert;
                 if (IsReady)
                 {
+                    Mat yuvConvert = Mat.FromPixelData(400, 400, MatType.CV_8UC2, _orignalMat.Data);
+                    yuvConvert = yuvConvert.ColRange(new OpenCvSharp.Range(0, 200));
+                    yuvConvert = yuvConvert.CvtColor(ColorConversionCodes.YUV2GRAY_Y422, 0);
+                    yuvConvert = yuvConvert.Resize(new Size(400, 400));
+                    _mat = yuvConvert;
                     FrameCount++;
                     _dimensions.width = _mat.Width;
                     _dimensions.height = _mat.Height;

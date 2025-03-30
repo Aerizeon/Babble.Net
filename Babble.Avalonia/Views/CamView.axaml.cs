@@ -181,7 +181,7 @@ public partial class CamView : UserControl, IIsVisible
 
         DispatcherTimer drawTimer = new()
         {
-            Interval = TimeSpan.FromMilliseconds(10)
+            Interval = TimeSpan.FromMilliseconds(66)
         };
         drawTimer.Tick += (s, e) => UpdateImage();
         drawTimer.Start();

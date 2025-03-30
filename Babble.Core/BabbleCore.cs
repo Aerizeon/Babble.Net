@@ -23,8 +23,6 @@ namespace Babble.Core;
 public partial class BabbleCore
 {
     [MemberNotNullWhen(true, nameof(PlatformConnector), nameof(_session), nameof(_floatFilter), nameof(_calibrationItems))]
-    
-    public bool IsInitializing {get; private set;}
     public bool IsRunning { get; private set; }
     public int FPS => (int)MathF.Floor(1000f / MS);
     public float MS { get; private set; }
@@ -37,11 +35,13 @@ public partial class BabbleCore
     private readonly DenseTensor<float> _inputTensor = new DenseTensor<float>([1, 1, 256, 256]);
     private readonly Stopwatch _sw = Stopwatch.StartNew();
     private Size _inputSize = new Size(256, 256);
+    byte[] _inputBuffer =  new byte[256 * 256];
     private Dictionary<string, CalibrationItem>? _calibrationItems;
     private InferenceSession? _session;
     private OneEuroFilter? _floatFilter;
     private float _lastTime = 0;
     private string? _inputName;
+    private int _initializeCounter = 0;
 
     static BabbleCore()
     {
@@ -95,7 +95,7 @@ public partial class BabbleCore
     /// <exception cref="InvalidOperationException"></exception>
     public void Start(bool loadConfig = true)
     {
-        IsInitializing = true;
+
         if (loadConfig)
         {
             Instance.Settings.Load();
@@ -114,10 +114,11 @@ public partial class BabbleCore
     /// <exception cref="InvalidOperationException"></exception>
     public void Start(BabbleSettings settings)
     {
+        var initCtr = Interlocked.CompareExchange(ref _initializeCounter, 1, 0);
         Logger.LogInformation("Starting BabbleCore...");
 
         // Fail fast
-        if (IsRunning)
+        if (IsRunning || initCtr != 0)
         {
             Logger.LogInformation("BabbleCore was already running. Restarting...");
             Stop();
@@ -161,6 +162,7 @@ public partial class BabbleCore
         _inputName = _session.InputMetadata.Keys.First().ToString();
         int[] dimensions = _session.InputMetadata.Values.First().Dimensions;
         _inputSize = new(dimensions[2], dimensions[3]);
+        _inputBuffer = new byte[dimensions[2] * dimensions[3]];
         IsRunning = true;
 
         Logger.LogInformation("BabbleCore started!");
@@ -275,11 +277,11 @@ public partial class BabbleCore
         image = null;
         dimensions = (0, 0);
 
-        byte[] data = new byte[_inputSize.Width * _inputSize.Height];
-        using var imageMat = Mat<byte>.FromPixelData(_inputSize.Height, _inputSize.Width, data);
+        
+        using var imageMat = Mat<byte>.FromPixelData(_inputSize.Height, _inputSize.Width, _inputBuffer);
         if (PlatformConnector?.TransformRawImage(imageMat) != true) return false;
 
-        image = data;
+        image = _inputBuffer;
         dimensions = (imageMat.Width, imageMat.Height);
         return true;
     }

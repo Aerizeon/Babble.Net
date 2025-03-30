@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Net.Security;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.VisualBasic;
 namespace Babble.Core.Scripts
 {
@@ -38,15 +39,10 @@ namespace Babble.Core.Scripts
         const int _UVC_GET_INFO = 0x86;
         const int _UVC_GET_DEF = 0x87;
         public static int _UVCIOC_CTRL_QUERY = _IOWR<uvc_xu_control_query>('u', 0x21);
+        public static int _UVCIOC_QUERYCAP = _IOR<v4l2_capability>('V', 0x00);
 
         private const string LibcLibrary = "libc";
 
-        [LibraryImport(LibcLibrary, SetLastError = true)]
-        public static partial int read(int fd, IntPtr buf, int count);
-        [LibraryImport(LibcLibrary, SetLastError = true)]
-        public static partial int open([MarshalAs(UnmanagedType.LPStr)] string pathname, FileOpenFlags flags);
-        [LibraryImport(LibcLibrary)]
-        internal static partial int close(int fd);
         [LibraryImport(LibcLibrary, SetLastError = true)]
         public static partial int ioctl(int fd, uint request, IntPtr argp);
 
@@ -55,8 +51,6 @@ namespace Babble.Core.Scripts
 
         [LibraryImport(LibcLibrary, SetLastError = true)]
         internal static partial int ioctl(int fd, uint request, ulong argp);
-        [LibraryImport(LibcLibrary, SetLastError = true)]
-        public static partial int write(int fd, IntPtr buf, int count);
 
         const int _IOC_NRBITS = 8;
         const int _IOC_TYPEBITS = 8;
@@ -105,10 +99,34 @@ namespace Babble.Core.Scripts
                 }
             }
         }
+        [StructLayout(LayoutKind.Sequential)]
+        public unsafe struct v4l2_capability
+        {
+            public fixed byte driver[16];
+            public fixed byte card[32];
+            public fixed byte bus_info[32];
+            public UInt32 version;
+            public UInt32 capabilities;
+            public UInt32 device_caps;
+            public fixed UInt32 reserved[3];
+        }
+
+        public static int v4l2_get_capability(int fd, out v4l2_capability cap)
+        {
+            Console.WriteLine("v4l2_get_capability");
+            unsafe
+            {
+                fixed (v4l2_capability* c = &cap)
+                {
+                    int rc = ioctl(fd, (uint)_UVCIOC_QUERYCAP, (IntPtr)(c));
+                    return rc;
+                }
+            }
+
+        }
 
         public static byte[] xu_get_cur(int fd, byte selector, int len)
         {
-            //Console.WriteLine("get_cur");
             byte[] data = new byte[len];
             unsafe
             {
@@ -123,7 +141,7 @@ namespace Babble.Core.Scripts
                         data = (IntPtr)dataptr
                     };
                     if (ioctl(fd, (uint)_UVCIOC_CTRL_QUERY, (IntPtr)(&c)) != 0)
-                        return data; //TODO: maybe throw here instead?
+                        throw new Exception("Error in ioctl call");
                 }
             }
             return data;
@@ -131,13 +149,11 @@ namespace Babble.Core.Scripts
 
         public static void set_cur_no_resp(int fd, byte[] data)
         {
-            Console.WriteLine("set_cur_no_resp: " + string.Join(",", data));
             xu_set_cur(fd, 2, data);
         }
 
         public static bool set_cur(int fd, byte[] data, int timeout = 1000)
         {
-            Console.WriteLine("set_cur: " + string.Join(", ", data));
             xu_set_cur(fd, 2, data);
             CancellationTokenSource cts = new CancellationTokenSource(timeout);
             while (!cts.Token.IsCancellationRequested)
@@ -148,19 +164,9 @@ namespace Babble.Core.Scripts
                     case 0x55:
                         break;
                     case 0x56:
-                        if (Enumerable.SequenceEqual(data[0..16], rcvdata[1..17]))
-                        {
-                            Console.WriteLine("Equal");
-                            return true;
-                        }
-                        else
-                        {
-                            Console.WriteLine("Non-Equal");
-                            return false;
-                        }
+                        return Enumerable.SequenceEqual(data[0..16], rcvdata[1..17]);
                     default:
-                        Console.WriteLine("Invalid Response");
-                        return false;
+                        throw new Exception("Invalid Response");
                 }
             }
             Console.WriteLine("set_cur timed out");
@@ -221,8 +227,6 @@ namespace Babble.Core.Scripts
             data[14] = 0x00;
             data[15] = 0x00;
             data[16] = 0x00;
-            data[254] = 0x53;
-            data[255] = 0x54;
 
             set_cur(fd, data);
             return 0;
@@ -230,32 +234,27 @@ namespace Babble.Core.Scripts
 
         public static void set_register_sensor(int fd, int addr, int value)
         {
-            Console.WriteLine("set_register_sensor");
             set_register(fd, _XU_REG_SENSOR, addr, value);
         }
 
         public static void get_register_sensor(int fd, int addr)
         {
-            Console.WriteLine("get_register_sensor");
             get_register(fd, _XU_REG_SENSOR, addr);
         }
 
         public static void set_enable_stream(int fd, bool enable)
         {
-            Console.WriteLine("set_enable_stream");
             byte[] data = new byte[384];
             data[0] = _XU_TASK_SET;
             data[1] = 0x14;
             data[2] = 0x00;
             data[3] = (byte)(enable ? 0x01 : 0x00);
-            data[254] = 0x53;
-            data[255] = 0x54;
+
             set_cur(fd, data);
         }
 
         public static uint get_len(int fd)
         {
-            Console.WriteLine("get_len");
             uint length = 0;
             unsafe
             {
@@ -272,7 +271,7 @@ namespace Babble.Core.Scripts
             return length;
         }
 
-        public async static Task<bool> activate_tracker(int fd)
+        public static bool activate_tracker(int fd)
         {
             Console.WriteLine("activate_tracker");
             //uint l = get_len(fd);
@@ -290,9 +289,9 @@ namespace Babble.Core.Scripts
             set_register_sensor(fd, 0x00, 0x40);
             set_register_sensor(fd, 0x08, 0x01);
             set_register_sensor(fd, 0x70, 0x00);
-            set_register_sensor(fd, 0x02, 0xFF); //IR ON
-            set_register_sensor(fd, 0x03, 0xFF); // IR ON
-            set_register_sensor(fd, 0x04, 0xFF); // IR ON
+            set_register_sensor(fd, 0x02, 0x20); //IR ON
+            set_register_sensor(fd, 0x03, 0x20); // IR ON
+            set_register_sensor(fd, 0x04, 0x20); // IR ON
             set_register_sensor(fd, 0x0e, 0x00);
             set_register_sensor(fd, 0x05, 0xb2);
             set_register_sensor(fd, 0x06, 0xb2);
